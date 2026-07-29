@@ -1,5 +1,5 @@
 export class SLList {
-        private items: any[] = [];
+        items: any[] = [];
     
         constructor(items: any[]) {
             this.items = items;
@@ -9,12 +9,14 @@ export class SLList {
             return "[" + this.items.map(item => item.toString()).join(", ") + "]";
         }
 
-        add(item: any) {
+        add(item: any): SLList {
             if (item instanceof SLList) {
                 this.items.push(...item.items);
             } else {
                 this.items.push(item);
             }
+
+            return this;
         }
 }
 

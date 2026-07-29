@@ -105,10 +105,63 @@ export function startsWithPatterns(text: string, patterns: (string | RegExp)[]):
     return finalRegex.test(text);
 }
 
-export function parseBrackets(text: string): any[] {
-    const opening = ['{', '[', '(', '<'];
-    const closing = ['}', ']', ')', '>'];
+const opening = ['{', '[', '(', '<'];
+const closing = ['}', ']', ')', '>'];
 
+//example: <1, 2.4, 7> or <1, 2.4, 7, 2>
+function isVectorOrRotation(text: string): boolean {
+    return /^<\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?(\s*,\s*-?\d+(\.\d+)?)?\s*>$/.test(text.trim());
+}
+
+function isOpeningVector(text: string, pos: number): boolean {
+    if(text[pos] !== '<') {
+        return false;
+    }
+    
+    const closingPos = text.indexOf('>', pos);
+
+    if (closingPos === -1) {
+        return false;
+    }
+
+    const vectorText = text.substring(pos, closingPos + 1);
+
+    return isVectorOrRotation(vectorText);
+}
+
+function isClosingVector(text: string, pos: number): boolean {
+    if(text[pos] !== '>') {
+        return false;
+    }
+
+    const openingPos = text.lastIndexOf('<', pos);
+
+    if (openingPos === -1) {
+        return false;
+    }
+
+    const vectorText = text.substring(openingPos, pos + 1);
+
+    return isVectorOrRotation(vectorText);
+}
+
+function isOpening(text: string, pos: number): boolean {
+    if(text[pos] == '<') {
+        return isOpeningVector(text, pos);
+    }
+
+    return (<any>opening).includes(text[pos]);
+}
+
+function isClosing(text: string, pos: number): boolean {
+    if(text[pos] == '>') {
+        return isClosingVector(text, pos);
+    }
+
+    return (<any>closing).includes(text[pos]);
+}
+
+export function parseBrackets(text: string): any[] {
     let index = 0;
 
     function parse(expectedClosing: string | null | undefined): any[] | null {
@@ -142,7 +195,7 @@ export function parseBrackets(text: string): any[] {
                 continue;
             }
 
-            if (opening.includes(char)) {
+            if(isOpening(text, index)) {
                 if (currentText || result.length === 0) {
                     result.push(currentText);
                     currentText = "";
@@ -164,7 +217,7 @@ export function parseBrackets(text: string): any[] {
                 continue;
             }
 
-            if (closing.includes(char)) {
+            if(isClosing(text, index)) {
                 if (char === expectedClosing) {
                     result.push(currentText);
                     index++;

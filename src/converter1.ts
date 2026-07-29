@@ -16,7 +16,7 @@ export function toJsExpression(node: any, typesMap: { [x: string]: string; }) {
     if(node && typeof node === 'object' && !Array.isArray(node)) {
         const inner:any = toJsExpression(node.content, typesMap);
         if (node.type === '<') return { code: `lsl_vector(${inner.code})`, type: 'vector' };
-        if (node.type === '[') return { code: `lsl_list(${inner.code})`, type: 'list' };
+        if (node.type === '[') return { code: `lsl_list([${inner.code}])`, type: 'list' };
         if (node.type === '(') return { code: `(${inner.code})`, type: inner.type };
         return { code: `(${inner.code})`, type: 'primitive' };
     }
@@ -71,9 +71,9 @@ export function toJsExpression(node: any, typesMap: { [x: string]: string; }) {
 
     function getNextAtomData(index: number): any {
         let atom = atoms[index];
-        if (!atom) return null;
+        if(!atom) return null;
 
-        if (atom.type === 'type_cast') {
+        if(atom.type === 'type_cast') {
             let nextData = getNextAtomData(index + 1);
             if (nextData) {
                 return {
@@ -83,13 +83,16 @@ export function toJsExpression(node: any, typesMap: { [x: string]: string; }) {
                 };
             }
         }
-        if (atom.type === 'lsl_object') {
+
+        if(atom.type === 'lsl_object') {
             return { code: atom.code, type: atom.lslType, consumedCount: 1 };
         }
-        if (atom.type === 'function_call') {
+
+        if(atom.type === 'function_call') {
             return { code: atom.code, type: atom.returnType, consumedCount: 1 };
         }
-        if (atom.type === 'token') {
+
+        if(atom.type === 'token') {
             let token = atom.value;
             let type = 'primitive';
             if (token.startsWith('"')) type = 'string';
@@ -97,10 +100,11 @@ export function toJsExpression(node: any, typesMap: { [x: string]: string; }) {
             else if (/^\d/.test(token)) type = 'primitive';
             return { code: token, type: type, consumedCount: 1 };
         }
+
         return null;
     }
 
-    for (let i = 0; i < atoms.length; i++) {
+    for(let i = 0; i < atoms.length; i++) {
         let atom = atoms[i];
 
         if(atom.type === 'type_cast') {
@@ -110,21 +114,20 @@ export function toJsExpression(node: any, typesMap: { [x: string]: string; }) {
                 currentType = atom.castTo;
                 i += nextData.consumedCount;
             }
+
             continue;
         }
 
-        if (atom.type === 'lsl_object') {
+        if(atom.type === 'lsl_object') {
             codeChunks.push(atom.code);
             currentType = atom.lslType;
-        } 
-        else if (atom.type === 'function_call') {
+        } else if(atom.type === 'function_call') {
             codeChunks.push(atom.code);
             currentType = atom.returnType;
-        } 
-        else if (atom.type === 'token') {
+        } else if(atom.type === 'token') {
             let token = atom.value;
 
-            if (['+', '-', '*', '/'].includes(token)) {
+            if(['+', '-', '*', '/'].includes(token)) {
                 let nextData = getNextAtomData(i + 1);
 
                 if(currentType === 'vector' || currentType === 'rotation' || currentType === 'list') {
@@ -141,8 +144,7 @@ export function toJsExpression(node: any, typesMap: { [x: string]: string; }) {
                 } else {
                     codeChunks.push(token);
                 }
-            } 
-            else {
+            } else {
                 if (token.startsWith('"')) currentType = 'string';
                 else if (/[a-zA-Z_]/.test(token)) currentType = typesMap[token] || 'primitive';
                 else if (/^\d/.test(token)) currentType = 'primitive';

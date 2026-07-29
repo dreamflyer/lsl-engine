@@ -8,11 +8,7 @@ import { SLList, SLVector, SLRotation } from "./structure";
 import { builtinFunctions } from "./builtin";
 
 function createExpressionRunner(lslExpression: string, variables: any): Function {
-    const typesMap: { [key: string]: string } = {};
-
-    Object.keys(variables).forEach(key => {
-        typesMap[key] = variables[key].type;
-    });
+    const typesMap: { [key: string]: string } = {...variables};
 
     const patched = toJsExpression(parseBrackets(lslExpression), typesMap);
     
@@ -39,7 +35,7 @@ function createDeclaredFunctionRunner(declaration: ASTNode): Function {
     const argNames = Object.keys(declaredArgs);
 
     function result(parentStack: Stack, ...args: any[]) {
-        const stack: Stack = parentStack.createChild(declaration);
+        const stack: Stack = parentStack.createChild();
         
         for(let i = 0; i < argNames.length; i++) {
             stack.declareVariable(declaredArgs[i]!.name, declaredArgs[i]!.type, args[i]);
@@ -52,7 +48,7 @@ function createDeclaredFunctionRunner(declaration: ASTNode): Function {
         return stack.retVal;
     }
 
-    result.declared = true;
+    result.declaredFunction = true;
 
     return result;
 }
@@ -106,6 +102,20 @@ function argumentsFromFunctionDeclaration(functionDeclaration: ASTNode): { name:
     return result;
 }
 
+function isParent(target: ASTNode, node: ASTNode): boolean {
+    let current: ASTNode | undefined = node;
+
+    while(current) {
+        if(current == target) {
+            return true;
+        }
+
+        current = current.parent;
+    }
+
+    return false;
+}
+
 function visibleDeclaredVaribablesAbove(node: ASTNode): { [key: string]: string } {
     let current : ASTNode | undefined = node;
 
@@ -116,7 +126,7 @@ function visibleDeclaredVaribablesAbove(node: ASTNode): { [key: string]: string 
                 const elements = (<any>current).expression as ASTNode[];
 
                 for(const item of elements) {
-                    if(item == node) {
+                    if(isParent(item, node)) {
                         break;
                     }
                     if(item.name == patternName.VARIABLE_DECLARATION_PATTERN) {
@@ -170,18 +180,98 @@ function visibleDeclaredVaribablesAbove(node: ASTNode): { [key: string]: string 
     return result;
 }
 
+function runLoop(loop: ASTNode, stack: Stack) {
+    let initializerExpression;
+    let conditionExpression;
+    let incrementExpression;
+
+    if(loop.name == patternName.FOR_LOOP_PATTERN) {
+        initializerExpression = (<any>loop).expression[0].expression[0].expression;
+        conditionExpression = (<any>loop).expression[0].expression[1].expression;
+        incrementExpression = (<any>loop).expression[0].expression[2].expression;
+    } else if(loop.name == patternName.WHILE_LOOP_PATTERN) {
+        conditionExpression = (<any>loop).expression[0].expression[0].expression;
+    }
+    
+    if(initializerExpression) {
+        const parts = initializerExpression.split("=").map((item: string) => item.trim());
+        const tempVariableDeclaration: ASTNode = <any>{
+            name: patternName.VARIABLE_DECLARATION_PATTERN,
+            expression: [
+                {name: patternName.VARIABLE_DECLARATION_HEADER_PATTERN, expression: parts[0]},
+                {name: patternName.VARIABLE_DECLARATION_VALUE_PATTERN, expression: parts[1]}
+            ],
+            parent: loop
+        }
+
+        stack.evalExpression(tempVariableDeclaration);
+    }
+
+    const tempCondionExpressionNode: ASTNode = <any>{
+        name: patternName.FUNCTION_CALL_PATTERN,//TODO: make separate pattern for this kind of cases, may be some TempPattern
+        expression: conditionExpression ? conditionExpression : "true",
+        parent: loop
+    }
+
+    let tempIncrementExpressionNode: ASTNode = <any>undefined;
+
+    if(incrementExpression) {
+        const parts = incrementExpression.split("=").map((item: string) => item.trim());
+
+        tempIncrementExpressionNode = <any>{
+            name: patternName.VARIABLE_DECLARATION_PATTERN,//TODO: make separate pattern for this kind of cases, may be some TempPattern
+            expression: [
+                {name: patternName.VARIABLE_DECLARATION_HEADER_PATTERN, expression: parts[0]},
+                {name: patternName.VARIABLE_DECLARATION_VALUE_PATTERN, expression: parts[1]}
+            ],
+            parent: loop
+        }
+    }
+
+    while(stack.evalExpression(tempCondionExpressionNode)) {
+        const childStack = stack.createChild();
+
+        runBody((<any>loop).expression[1], childStack);
+
+        if(childStack.returned) {
+            stack.retVal = childStack.retVal;
+            stack.returned = true;
+
+            (<any>childStack).parent = undefined;
+
+            break;
+        }
+
+        if(tempIncrementExpressionNode) {
+            stack.declareOrSetVariableFromNode(tempIncrementExpressionNode);
+        }
+
+        (<any>childStack).parent = undefined;
+    }
+}
+
 function runBody(body: ASTNode, stack: Stack) {
-    (<any>body).expression.forEach((element: ASTNode) => {
+    for(const element of (<any>body).expression) {
         if(element.name == patternName.VARIABLE_DECLARATION_PATTERN) {
             stack.declareOrSetVariableFromNode(element);
         } else if(element.name == patternName.FUNCTION_CALL_PATTERN) {
             stack.evalExpression(element);
-        } else if(element.name == patternName.RETURN_PATTERN) {
-            stack.retVal = stack.evalExpression(element);
         } else if(element.name == patternName.FUNCTION_DECLARATION_PATTERN) {
             stack.declareFunction(element);  
+        } else if(element.name == patternName.FOR_LOOP_PATTERN || element.name == patternName.WHILE_LOOP_PATTERN) {
+            runLoop(element, stack);
+
+            if(stack.returned) {
+                break;
+            }
+        } else if(element.name == patternName.RETURN_PATTERN) {
+            stack.returned = true;
+
+            stack.retVal = stack.evalExpression(element);
         }
-    })
+    }
+
+    return false;
 }
 
 function lslExpressionFromNode(node: ASTNode): string {
@@ -212,17 +302,29 @@ const defaults: any = {
 class Stack {
     parent?: Stack;
 
-    node: ASTNode;
+    //node: ASTNode;
 
     variables: { [key: string]: { type: string, value: any } } = {};
 
     compiledExpressions: { [key: string]: Function } = {};
 
+    returned: boolean = false;
+
     retVal: any = undefined;
 
-    constructor(node: ASTNode, parent?: Stack) {
-        this.node = node;
+    constructor(parent?: Stack) {
+        //this.node = node;
         (<any>this).parent = parent;
+    }
+
+    root(): Stack {
+        let current: Stack = this;
+
+        while(current.parent) {
+            current = current.parent;
+        }
+
+        return current;
     }
 
     evalExpression(node: ASTNode): any {
@@ -243,12 +345,16 @@ class Stack {
         Object.keys(runtimeVariables).sort().forEach(key => {
             let value = this.getRuntimeVariables()[key]!.value;
 
-            variables.push(value.declared ? (...args: any[]) => value(this, ...args) : value);
+            variables.push(value.declaredFunction ? (...args: any[]) => {
+                return value(this.root(), ...args);
+            } : value);
         });
 
         const runner: Function = this.compiledExpressions[lslExpression];
 
-        return runner(...variables);
+        const result = runner(...variables);
+
+        return result;
     }
 
     declareVariable(name: string, type: string, value: any) {
@@ -293,7 +399,7 @@ class Stack {
 
         let currentStack: Stack | undefined = this;
 
-        while(currentStack && !currentStack.variables[name] && !(currentStack.parent == undefined || currentStack == this)) {
+        while(currentStack && !currentStack.variables[name]) {
             currentStack = currentStack.parent;
         }
 
@@ -322,8 +428,8 @@ class Stack {
         }
     }
 
-    getRuntimeVariables(caller: Stack = this): { [key: string]: { type: string, value: any } } {
-        const result: any = this.parent?.getRuntimeVariables(caller) || {};
+    getRuntimeVariables1(caller: Stack = this): { [key: string]: { type: string, value: any } } {
+        const result: any = this.parent?.getRuntimeVariables1(caller) || {};
 
         if(caller == this || !this.parent) {
             return {...result, ...this.variables};
@@ -332,8 +438,14 @@ class Stack {
         }
     }
 
-    createChild(node: ASTNode): Stack {
-        const result = new Stack(node, this);
+    getRuntimeVariables(): { [key: string]: { type: string, value: any } } {
+        const result: any = this.parent?.getRuntimeVariables() || {};
+
+        return {...result, ...this.variables};
+    }
+
+    createChild(): Stack {
+        const result = new Stack(this);
 
         return result;
     }
@@ -374,7 +486,7 @@ export class LSLEngine {
     constructor(lsl: string) {
         this.rootAst = parse(lsl);
 
-        this.rootStack = new Stack(this.rootAst, undefined);
+        this.rootStack = new Stack(undefined);
 
         this.loadBuiltins();
 
@@ -401,7 +513,7 @@ export class LSLEngine {
 
     runHandler(handlerName: string, args: {name: string, value: string}[]) {
         const handler: ASTNode = this.handlers[this.currentState + "_" + handlerName]!;
-        const stack = this.rootStack.createChild(handler);
+        const stack = this.rootStack.createChild();
 
         runBody((<any>handler).expression[2], stack);
 
